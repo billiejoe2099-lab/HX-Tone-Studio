@@ -1,0 +1,51 @@
+HX TONE STUDIO · VERSIÓN 2
+==========================
+
+Archivos
+- index.html: app completa y autocontenida.
+- worker.js: intermediario privado para generar recomendaciones con OpenAI.
+
+Búsqueda y portadas
+La búsqueda consulta Apple iTunes Search API por internet; muestra título, artista,
+album/versión y carátula. Al elegir un resultado, abre automáticamente el estudio
+y conserva la portada y los metadatos publicados por Apple.
+
+Recomendación automática de ChatGPT/OpenAI
+El HTML no puede usar tu plan de ChatGPT ni guardar una clave secreta de forma segura.
+Para generar afinación, tonalidad, tempo, cadena Live/PA y snapshots al seleccionar
+una canción, hay que desplegar worker.js una vez como Cloudflare Worker y configurar
+una cuenta/clave de API de OpenAI. El uso de API se cobra aparte del plan ChatGPT.
+
+Configuración resumida del Worker
+1. Crea un Worker nuevo en Cloudflare y copia el contenido de worker.js.
+2. En Settings > Variables and Secrets agrega:
+   - OPENAI_API_KEY como SECRET: tu clave de API de OpenAI.
+   - APP_TOKEN como SECRET: una frase/token aleatorio privado para proteger el Worker.
+   - CORS_ORIGIN como variable: el origen exacto donde abrirás el HTML.
+     Ejemplos: https://TU-USUARIO.github.io o null para una página file:// local.
+     Se pueden poner varios orígenes separados por comas.
+   - OPENAI_MODEL (opcional): gpt-5.4-mini (modelo predeterminado).
+3. Publica el Worker. Copia su dirección HTTPS.
+4. Abre index.html, toca “Configurar recomendación automática” y pega la URL
+   del Worker y el mismo APP_TOKEN. Usa “Probar conexión” y guarda.
+5. Busca y elige una canción. Se generará la recomendación automáticamente.
+
+La clave OPENAI_API_KEY solo se configura como secreto del Worker; nunca se pega
+en index.html ni se comparte. No publiques APP_TOKEN en un repositorio público.
+El token almacenado en el teléfono es un control de acceso, no sustituye límites
+de uso/rate limit del servidor si la app se publica para otras personas.
+
+Uso local
+Puedes abrir index.html desde el teléfono o computadora. Los recursos de búsqueda
+requieren internet. Si abres con file://, el navegador manda el origen “null” al
+Worker; configura CORS_ORIGIN como null. En algunos navegadores, el acceso a red
+desde archivos locales puede estar restringido; en ese caso sirve el mismo HTML
+por HTTPS, por ejemplo GitHub Pages. El HTML descargado puede abrirse sin alojar
+la página, pero buscar canciones y generar recomendaciones sí requiere red.
+
+Alcance y precisión
+La metadata de portada, álbum, artista y título viene de los resultados del catálogo.
+La IA investiga los datos musicales y arma una sugerencia visual editable; cuando
+faltan fuentes fiables, debe marcar la incertidumbre. Revisa siempre el preset,
+los modelos/parámetros disponibles en tu firmware y el nivel antes de tocar.
+La app no escribe ni instala un preset .hlx en la HX Stomp.
