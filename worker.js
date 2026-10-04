@@ -6,6 +6,8 @@
 const DEFAULT_ORIGIN = "https://billiejoe2099-lab.github.io";
 const MODEL_FALLBACKS = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"];
 
+/** @typedef {{ APP_TOKEN: string, GEMINI_API_KEY: string, CORS_ORIGIN?: string, GEMINI_MODEL?: string }} WorkerEnv */
+
 const SYSTEM = `Eres asesor experto de tonos para Line 6 HX Stomp con firmware 3.80. Genera una recomendación práctica para la grabación y el equipo indicados. Responde exclusivamente un objeto JSON válido, sin markdown ni texto fuera del JSON. Esquema: {meta:{song,artist,album,coverUrl,trackId,tuning,tempo,key,notes,guitarId,guitarAdvice},modes:{live:{label,summary,blocks:[{id,type,name,model,icon,enabled,dsp,params:{parametro:valor}}]},pa:{label,summary,blocks:[...]}},snapshots:{live:[{id,name,changes:[{blockId,kind,params?,block?}]}],pa:[...]}}.
 
 Sé honesto. No inventes datos musicales, fuentes, modelos HX o valores exactos; si no tienes información fiable, usa cadena vacía o null y dilo en meta.notes. No hay búsqueda web en esta generación; no afirmes haber investigado. No reproduzcas letras, tablaturas ni el manual.
@@ -42,7 +44,8 @@ function tokenIsValid(request, env) {
 }
 
 function isDailyQuotaError(message) {
-  return /daily|per.day|quota.*(exceed|limit)|resource_exhausted.*quota/i.test(message || "");
+  const text = typeof message === "string" ? message : JSON.stringify(message || {});
+  return /daily|per[_\s-]?day|requests_per_day|tokens_per_day|quota.{0,80}(daily|per.day)/i.test(text);
 }
 
 async function askGemini(model, body, apiKey) {
@@ -51,13 +54,14 @@ async function askGemini(model, body, apiKey) {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
     body,
-    signal: AbortSignal.timeout(25000),
   });
+  /** @type {any} */
   const data = await upstream.json().catch(() => ({}));
   return { upstream, data };
 }
 
 export default {
+  /** @param {Request} request @param {WorkerEnv} env */
   async fetch(request, env) {
     const requestOrigin = request.headers.get("Origin") || "";
     const origins = configuredOrigins(env);
@@ -95,11 +99,15 @@ export default {
     if (request.method !== "POST") return json({ error: "Usa POST para generar una recomendación." }, 405, origin, allowedOrigin);
     if (!env.GEMINI_API_KEY) return json({ error: "Falta GEMINI_API_KEY en los secretos del Worker." }, 500, origin, allowedOrigin);
 
+    /** @type {any} */
     let requestData;
     try {
       requestData = await request.json();
     } catch {
       return json({ error: "El cuerpo de la solicitud no es JSON válido." }, 400, origin, allowedOrigin);
+    }
+    if (!requestData || typeof requestData !== "object" || Array.isArray(requestData)) {
+      return json({ error: "El cuerpo JSON debe ser un objeto con canción, guitarra y partes." }, 400, origin, allowedOrigin);
     }
 
     const input = {
@@ -120,6 +128,7 @@ export default {
     let lastStatus = 503;
     let lastMessage = "Gemini está temporalmente saturado.";
     let attempted = [];
+    let quotaExhausted = false;
     for (const model of models) {
       attempted.push(model);
       for (let attempt = 0; attempt < 2; attempt++) {
@@ -148,7 +157,10 @@ export default {
         if (upstream.status === 401 || upstream.status === 403) {
           return json({ error: `Google rechazó GEMINI_API_KEY: ${lastMessage}` }, 502, origin, allowedOrigin);
         }
-        if (upstream.status === 429 && isDailyQuotaError(lastMessage)) break;
+        if (upstream.status === 429 && isDailyQuotaError(data.error)) {
+          quotaExhausted = true;
+          break;
+        }
 
         const retryable = upstream.status === 408 || upstream.status === 429 || upstream.status === 503 || upstream.status >= 500;
         const modelUnavailable = upstream.status === 404;
@@ -156,10 +168,10 @@ export default {
         if (attempt === 0 && retryable) await new Promise((resolve) => setTimeout(resolve, 800 + Math.random() * 450));
         else break;
       }
-      if (lastStatus === 429 && isDailyQuotaError(lastMessage)) break;
+      if (quotaExhausted) break;
     }
 
-    const quotaNote = lastStatus === 429 && isDailyQuotaError(lastMessage)
+    const quotaNote = quotaExhausted
       ? " La cuota diaria del proyecto parece agotada; cambiar de modelo no la restablece."
       : "";
     return json({
