@@ -1,72 +1,106 @@
 /**
- * Gemini free-tier proxy for HX Tone Studio.
- * Cloudflare Worker free plan + a Gemini API key from Google AI Studio.
- * Configure GEMINI_API_KEY, APP_TOKEN, and CORS_ORIGIN as Worker secrets/vars.
+ * Cloudflare Worker proxy for HX Tone Studio.
+ * Required secrets: GEMINI_API_KEY, APP_TOKEN
+ * Optional vars: CORS_ORIGIN (comma-separated), GEMINI_MODEL
  */
-const corsHeaders = (origin) => ({
-  "Access-Control-Allow-Origin": origin,
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, X-App-Token",
-  "Access-Control-Max-Age": "86400",
-  "Vary": "Origin",
-});
+const DEFAULT_ORIGIN = "https://billiejoe2099-lab.github.io";
+const MODEL_FALLBACKS = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"];
 
-function json(data, status, origin) {
+const SYSTEM = `Eres asesor experto de tonos para Line 6 HX Stomp con firmware 3.80. Genera una recomendación práctica para la grabación y el equipo indicados. Responde exclusivamente un objeto JSON válido, sin markdown ni texto fuera del JSON. Esquema: {meta:{song,artist,album,coverUrl,trackId,tuning,tempo,key,notes,guitarId,guitarAdvice},modes:{live:{label,summary,blocks:[{id,type,name,model,icon,enabled,dsp,params:{parametro:valor}}]},pa:{label,summary,blocks:[...]}},snapshots:{live:[{id,name,changes:[{blockId,kind,params?,block?}]}],pa:[...]}}.
+
+Sé honesto. No inventes datos musicales, fuentes, modelos HX o valores exactos; si no tienes información fiable, usa cadena vacía o null y dilo en meta.notes. No hay búsqueda web en esta generación; no afirmes haber investigado. No reproduzcas letras, tablaturas ni el manual.
+
+Reglas: ambos modos comienzan con Input Gate y sus parámetros Threshold y Decay. Live va al FX Return de Crate MX120R y no incluye Cab/IR. Contexto de banda: dos guitarras, bajo, batería, teclado y voces; mezcla conservadora para dejar espacio. PA directo sí incluye amp y cab, además micrófono, posición, distancia, low cut y high cut como parámetros del bloque Cab cuando sean compatibles. Máximo 8 bloques DSP activos por cadena. Si la guitarra está en E estándar pero la canción requiere otra afinación, recomienda Simple Pitch con el cambio requerido y explica límites prácticos. Ajusta al perfil de guitarra y partes solicitadas. Sugiere pastilla/controles en meta.guitarAdvice. Snapshots son cambios relativos al Rhythm: kind='change' incluye solo parámetros alterados, kind='on' incluye el bloque completo, kind='off' apaga el bloque. Incluye snapshots solo para las partes solicitadas.`;
+
+function configuredOrigins(env) {
+  return (env.CORS_ORIGIN || DEFAULT_ORIGIN)
+    .split(",")
+    .map((value) => value.trim().replace(/^['"]|['"]$/g, "").replace(/\/$/, ""))
+    .filter(Boolean);
+}
+
+function responseHeaders(origin, allowedOrigin) {
+  return {
+    "Access-Control-Allow-Origin": origin ? allowedOrigin : DEFAULT_ORIGIN,
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, X-App-Token",
+    "Access-Control-Max-Age": "86400",
+    "Vary": "Origin",
+  };
+}
+
+function json(data, status, origin, allowedOrigin) {
   return new Response(JSON.stringify(data), {
-    status: status || 200,
-    headers: { ...corsHeaders(origin), "Content-Type": "application/json; charset=utf-8" },
+    status,
+    headers: { ...responseHeaders(origin, allowedOrigin), "Content-Type": "application/json; charset=utf-8" },
   });
 }
 
-function getOrigin(request, env) {
-  const origin = request.headers.get("Origin") || "null";
-  // Dashboard secret/var takes precedence; this is the user's GitHub Pages fallback.
-  const allowed = (env.CORS_ORIGIN || "https://billiejoe2099-lab.github.io").split(",").map((x) => x.trim()).filter(Boolean);
-  return { origin, allowed: allowed.includes(origin) };
+function tokenIsValid(request, env) {
+  return typeof env.APP_TOKEN === "string" && env.APP_TOKEN.length > 0 &&
+    request.headers.get("X-App-Token") === env.APP_TOKEN;
 }
 
-function hasValidToken(request, env) {
-  return Boolean(env.APP_TOKEN) && request.headers.get("X-App-Token") === env.APP_TOKEN;
+function isDailyQuotaError(message) {
+  return /daily|per.day|quota.*(exceed|limit)|resource_exhausted.*quota/i.test(message || "");
 }
 
-const SYSTEM = `Eres asesor de tonos y presets para Line 6 HX Stomp, firmware 3.80. Devuelve SOLO un objeto JSON, sin markdown, con esta forma: {meta:{song,artist,album,coverUrl,trackId,tuning,tempo,key,notes,guitarId},modes:{live:{label,summary,blocks:[{id,type,name,model,icon,enabled,dsp,params:{nombreParametro:valor}}]},pa:{label,summary,blocks:[...]}},snapshots:{live:[{id,name,changes:[{blockId,kind,params?,block?}]}],pa:[...]}}.
-
-Sé honesto: no inventes fuentes, modelo HX ni valores exactos. No hay búsqueda web en esta generación gratuita; usa solo conocimientos previos y los metadatos entregados. Si la afinación, tonalidad o tempo no te constan con fiabilidad, devuelve cadena vacía o null y explica la incertidumbre en meta.notes. Recomienda verificar manualmente antes de tocar. No reproduzcas letras, tablaturas ni el manual.
-
-Reglas del preset: comienza cada modo con Input Gate (threshold y decay), nunca más de 8 bloques por cadena. Live para FX Return de Crate MX120R, sin Cab/IR, banda de 2 guitarras, bajo, batería, teclado y voz; mezcla conservadora. PA directo: incluye amp y cab con micrófono, posición, distancia, low cut y high cut usando nombres compatibles con HX Stomp 3.80. Si la guitarra está en E estándar y la canción requiere Eb, añade Simple Pitch con -1 semitono, dejando clara la limitación. Ajusta cadena al perfil de guitarra y a las partes solicitadas. Sugiere pickup/controles en meta.guitarAdvice o meta.notes. Snapshots son cambios respecto a Rhythm: kind='change' con solo parámetros alterados, kind='on' con block completo, kind='off' para apagar; crea solo los solicitados (lead y clean solo si fueron marcados). Incluye ambos modos.`;
+async function askGemini(model, body, apiKey) {
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+  const upstream = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+    body,
+    signal: AbortSignal.timeout(25000),
+  });
+  const data = await upstream.json().catch(() => ({}));
+  return { upstream, data };
+}
 
 export default {
   async fetch(request, env) {
-    const { origin, allowed } = getOrigin(request, env);
+    const requestOrigin = request.headers.get("Origin") || "";
+    const origins = configuredOrigins(env);
+    const origin = requestOrigin.replace(/\/$/, "");
+    const allowed = !origin || origins.includes(origin);
+    const allowedOrigin = origin && origins.includes(origin) ? origin : (origins[0] || DEFAULT_ORIGIN);
+
     if (!allowed) return new Response("Origin not allowed", { status: 403 });
-    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
+    if (request.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: responseHeaders(origin, allowedOrigin) });
+    }
 
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname.endsWith("/health")) {
-      if (!hasValidToken(request, env)) return json({ error: "Token incorrecto o no configurado." }, 401, origin);
-      return json({ ok: true, model: env.GEMINI_MODEL || "gemini-3.8-flash" }, 200, origin);
+      if (!tokenIsValid(request, env)) return json({ error: "Token incorrecto o no configurado." }, 401, origin, allowedOrigin);
+      return json({ ok: true, model: env.GEMINI_MODEL || MODEL_FALLBACKS[0] }, 200, origin, allowedOrigin);
     }
-    if (!hasValidToken(request, env)) return json({ error: "Token incorrecto o no configurado." }, 401, origin);
+
+    if (!tokenIsValid(request, env)) return json({ error: "Token incorrecto o no configurado." }, 401, origin, allowedOrigin);
     if (request.method === "GET" && url.pathname.endsWith("/search")) {
       const term = (url.searchParams.get("term") || "").trim();
-      if (term.length < 2) return json({ results: [] }, 200, origin);
+      if (term.length < 2) return json({ results: [] }, 200, origin, allowedOrigin);
       try {
         const catalogUrl = new URL("https://itunes.apple.com/search");
         catalogUrl.search = new URLSearchParams({ media: "music", entity: "song", limit: "14", country: "MX", term }).toString();
-        const catalogResponse = await fetch(catalogUrl.toString(), { headers: { "Accept": "application/json" } });
-        if (!catalogResponse.ok) return json({ error: `Apple Search respondió ${catalogResponse.status}.` }, 502, origin);
+        const catalogResponse = await fetch(catalogUrl.toString(), { headers: { Accept: "application/json" } });
+        if (!catalogResponse.ok) return json({ error: `Apple Search respondió ${catalogResponse.status}.` }, 502, origin, allowedOrigin);
         const catalog = await catalogResponse.json();
-        return json({ results: catalog.results || [] }, 200, origin);
+        return json({ results: catalog.results || [] }, 200, origin, allowedOrigin);
       } catch (error) {
-        return json({ error: "No se pudo consultar Apple Search: " + error.message }, 502, origin);
+        return json({ error: `No se pudo consultar Apple Search: ${error.message || "error de red"}` }, 502, origin, allowedOrigin);
       }
     }
-    if (request.method !== "POST") return json({ error: "Usa POST para generar una recomendación." }, 405, origin);
-    if (!env.GEMINI_API_KEY) return json({ error: "Falta configurar GEMINI_API_KEY como secreto en el Worker." }, 500, origin);
+
+    if (request.method !== "POST") return json({ error: "Usa POST para generar una recomendación." }, 405, origin, allowedOrigin);
+    if (!env.GEMINI_API_KEY) return json({ error: "Falta GEMINI_API_KEY en los secretos del Worker." }, 500, origin, allowedOrigin);
 
     let requestData;
-    try { requestData = await request.json(); }
-    catch { return json({ error: "El cuerpo de la solicitud no es JSON válido." }, 400, origin); }
+    try {
+      requestData = await request.json();
+    } catch {
+      return json({ error: "El cuerpo de la solicitud no es JSON válido." }, 400, origin, allowedOrigin);
+    }
 
     const input = {
       track: requestData.track || {},
@@ -75,27 +109,61 @@ export default {
       firmware: requestData.firmware || "HX Stomp 3.80",
       rig: requestData.rig || {},
     };
-    try {
-      const model = env.GEMINI_MODEL || "gemini-3.8-flash";
-      const upstream = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": env.GEMINI_API_KEY },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: SYSTEM }] },
-          contents: [{ role: "user", parts: [{ text: JSON.stringify(input) }] }],
-          generationConfig: { responseMimeType: "application/json", temperature: 0.35, maxOutputTokens: 7000 },
-        }),
-      });
-      const result = await upstream.json();
-      if (!upstream.ok) return json({ error: result.error?.message || `Gemini respondió ${upstream.status}. Revisa el modelo y la cuota gratis.` }, upstream.status, origin);
-      const text = result.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("").trim();
-      if (!text) return json({ error: result.promptFeedback?.blockReason || "Gemini no devolvió texto. Revisa límites o filtros de seguridad." }, 502, origin);
-      let preset;
-      try { preset = JSON.parse(text); }
-      catch { return json({ error: "Gemini no devolvió JSON válido. Vuelve a intentarlo." }, 502, origin); }
-      return json({ preset, model }, 200, origin);
-    } catch (error) {
-      return json({ error: "No se pudo contactar Gemini: " + error.message }, 502, origin);
+    const preferred = (env.GEMINI_MODEL || MODEL_FALLBACKS[0]).trim().replace(/^models\//, "");
+    const models = [...new Set([preferred, ...MODEL_FALLBACKS])];
+    const body = JSON.stringify({
+      systemInstruction: { parts: [{ text: SYSTEM }] },
+      contents: [{ role: "user", parts: [{ text: JSON.stringify(input) }] }],
+      generationConfig: { responseMimeType: "application/json", temperature: 0.35, maxOutputTokens: 7000 },
+    });
+
+    let lastStatus = 503;
+    let lastMessage = "Gemini está temporalmente saturado.";
+    let attempted = [];
+    for (const model of models) {
+      attempted.push(model);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        let result;
+        try {
+          result = await askGemini(model, body, env.GEMINI_API_KEY);
+        } catch (error) {
+          lastStatus = 502;
+          lastMessage = error.name === "TimeoutError" ? "La solicitud a Gemini excedió 25 segundos." : (error.message || "Error de red con Gemini.");
+          break;
+        }
+
+        const { upstream, data } = result;
+        if (upstream.ok) {
+          const answerText = data.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("").trim();
+          if (!answerText) return json({ error: data.promptFeedback?.blockReason || `Gemini (${model}) no devolvió contenido.` }, 502, origin, allowedOrigin);
+          try {
+            return json({ preset: JSON.parse(answerText), model }, 200, origin, allowedOrigin);
+          } catch {
+            return json({ error: `Gemini (${model}) no devolvió JSON válido. Prueba otra vez.` }, 502, origin, allowedOrigin);
+          }
+        }
+
+        lastStatus = upstream.status;
+        lastMessage = data.error?.message || `Gemini respondió ${upstream.status}.`;
+        if (upstream.status === 401 || upstream.status === 403) {
+          return json({ error: `Google rechazó GEMINI_API_KEY: ${lastMessage}` }, 502, origin, allowedOrigin);
+        }
+        if (upstream.status === 429 && isDailyQuotaError(lastMessage)) break;
+
+        const retryable = upstream.status === 408 || upstream.status === 429 || upstream.status === 503 || upstream.status >= 500;
+        const modelUnavailable = upstream.status === 404;
+        if (!retryable && !modelUnavailable) return json({ error: `${model}: ${lastMessage}` }, upstream.status, origin, allowedOrigin);
+        if (attempt === 0 && retryable) await new Promise((resolve) => setTimeout(resolve, 800 + Math.random() * 450));
+        else break;
+      }
+      if (lastStatus === 429 && isDailyQuotaError(lastMessage)) break;
     }
+
+    const quotaNote = lastStatus === 429 && isDailyQuotaError(lastMessage)
+      ? " La cuota diaria del proyecto parece agotada; cambiar de modelo no la restablece."
+      : "";
+    return json({
+      error: `No se pudo generar el preset. Modelos intentados: ${attempted.join(", ")}. ${lastMessage}${quotaNote} Puedes cambiar a ChatGPT manual desde la app.`,
+    }, lastStatus >= 400 && lastStatus <= 599 ? lastStatus : 503, origin, allowedOrigin);
   },
 };

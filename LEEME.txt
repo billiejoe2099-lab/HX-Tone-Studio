@@ -1,56 +1,25 @@
-HX TONE STUDIO · GEMINI FREE TIER · PAQUETE GITHUB PAGES
-=========================================================
+HX TONE STUDIO · V3 · PAQUETE LISTO PARA GITHUB PAGES
+======================================================
 
-QUÉ ES ESTE PAQUETE
-- index.html: app completa, lista para subir a la raíz del repo de GitHub Pages.
-- worker.js: un único Cloudflare Worker gratuito que hace de proxy seguro para
-  Apple Search y para Gemini.
+ARCHIVOS
+- index.html: app autocontenida; súbela a la raíz del repositorio de GitHub Pages.
+- worker.js: proxy para Apple Search y Gemini en Cloudflare.
 
-FLUJO
-1. En la página inicial escribe 2 o más letras; tras ~0.4 s aparecen versiones
-   con artista, álbum y portada. El navegador intenta Apple Search directamente.
-   Si esa conexión está bloqueada, configura el Worker en el botón “Configurar
-   Gemini gratis”; desde entonces la búsqueda pasa por el Worker.
-2. Elige una versión. Después de seleccionar, Gemini genera los dos modos Live/PA,
-   la cadena y snapshots solicitados y carga el resultado en la interfaz.
+NOVEDADES
+- Al elegir una canción puedes usar Gemini automático o ChatGPT manual.
+- El modo manual genera un prompt específico con canción, guitarra y partes marcadas; cópialo en ChatGPT y pega aquí su respuesta JSON para verla como cadena, parámetros y snapshots.
+- “Guardar preset” conserva la recomendación en este navegador. “Mis presets” permite ver Todo, Gemini y ChatGPT con carátula, canción y artista; puedes abrir o borrar.
+- Los presets se guardan localmente en este navegador/dispositivo actual; no se sincronizan entre teléfono y computadora.
 
-CONFIGURACIÓN ÚNICA DE GEMINI FREE TIER
-1. En Google AI Studio crea una API key asociada a un proyecto Free Tier.
-   Modelo predeterminado: gemini-3.8-flash (el modelo estable más reciente según
-   la documentación consultada el 4 de octubre de 2026).
-2. En Cloudflare Workers, crea un Worker nuevo y pega el contenido de worker.js.
-3. En Settings > Variables and Secrets configura:
-   - GEMINI_API_KEY: agrega la clave de AI Studio como SECRET.
-   - APP_TOKEN: agrega como SECRET una frase larga/aleatoria que inventes.
-   - CORS_ORIGIN: variable con el origen exacto de GitHub Pages. Ejemplo:
-     https://TU-USUARIO.github.io (solo origen; no agregues /nombre-del-repo).
-     Para abrir con file:// usa null. Varios orígenes pueden ir separados por coma.
-   - GEMINI_MODEL: opcional. Si lo omites, se usa gemini-3.8-flash.
-4. Despliega el Worker y copia la dirección HTTPS publicada.
-5. En index.html pulsa “Configurar Gemini gratis”. Pega la URL del Worker y el
-   mismo APP_TOKEN. Pulsa “Probar conexión” y luego “Guardar conexión”.
-6. Escribe una canción, escoge la versión y espera a que aparezca el preset.
+ACTUALIZAR GITHUB PAGES
+1. Extrae el ZIP.
+2. En tu repositorio, reemplaza el index.html publicado por el index.html de este paquete.
+3. Espera a que Pages publique la actualización y recarga la página.
 
-SUBIR EL SITIO A GITHUB PAGES
-Extrae el ZIP y sube el index.html que está en su raíz a la raíz del repo que
-publica Pages, reemplazando el index anterior. El sitio se sirve desde la URL
-/pages del repo; CORS_ORIGIN sigue siendo solo https://TU-USUARIO.github.io.
+ACTUALIZAR CLOUDFLARE WORKER (OPCIONAL)
+1. Abre el Worker existente y reemplaza su código por worker.js.
+2. Conserva los secretos GEMINI_API_KEY y APP_TOKEN y la variable CORS_ORIGIN.
+3. Despliega el Worker. No pegues la API key en GitHub ni en la página.
+4. En la app, configura la URL workers.dev y el APP_TOKEN, luego usa “Probar conexión”.
 
-PRECIO, CUOTAS Y DATOS
-- El nivel gratuito de Gemini depende de modelo, región y cuotas vigentes en AI
-  Studio. No habilites billing si no quieres cargos; al agotar cuota verás un
-  mensaje de error/espera.
-- Cloudflare Workers tiene un nivel Free sujeto a límites y cambios.
-- Google indica que los datos enviados al nivel gratuito pueden usarse para
-  mejorar productos. Al generar, se envían canción, artista, álbum, perfil de
-  guitarra y partes solicitadas.
-- No se habilita búsqueda web de Gemini para evitar cargos de grounding. Las
-  recomendaciones de afinación, tonalidad, tempo y efectos pueden fallar: el
-  modelo debe dejar lo dudoso sin confirmar. Verifica antes de tocar.
-- Mantén GEMINI_API_KEY y APP_TOKEN como secretos de Cloudflare. No los pongas en
-  el HTML ni en el repositorio.
-
-SI NO APARECEN CANCIONES
-Comprueba que publicaste el index.html de este ZIP, escribe al menos dos letras,
-espera un momento y revisa el mensaje bajo el buscador. Si Apple Search queda
-bloqueado por el navegador, configura el Worker para usar su ruta /search proxy.
+El Worker intenta gemini-3.8-flash, gemini-3.7-flash y gemini-3.6-flash; reintenta errores transitorios y da un mensaje claro si la cuota del proyecto está agotada. El modo ChatGPT manual no requiere Worker ni clave Gemini. La búsqueda de canciones y carátulas requiere internet.
