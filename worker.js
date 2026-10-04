@@ -20,7 +20,8 @@ function json(data, status, origin) {
 
 function getOrigin(request, env) {
   const origin = request.headers.get("Origin") || "null";
-  const allowed = (env.CORS_ORIGIN || "").split(",").map((x) => x.trim()).filter(Boolean);
+  // Dashboard secret/var takes precedence; this is the user's GitHub Pages fallback.
+  const allowed = (env.CORS_ORIGIN || "https://billiejoe2099-lab.github.io").split(",").map((x) => x.trim()).filter(Boolean);
   return { origin, allowed: allowed.includes(origin) };
 }
 
