@@ -1,25 +1,27 @@
-HX TONE STUDIO · V3 · PAQUETE LISTO PARA GITHUB PAGES
-======================================================
+HX TONE STUDIO · APINEX · SIN CLOUDFLARE WORKER
+================================================
 
 ARCHIVOS
-- index.html: app autocontenida; súbela a la raíz del repositorio de GitHub Pages.
-- worker.js: proxy para Apple Search y Gemini en Cloudflare.
+- index.html: aplicación completa, autocontenida; publícala en la raíz de GitHub Pages.
+- No se necesita worker.js ni instalar dependencias.
 
-NOVEDADES
-- Al elegir una canción puedes usar Gemini automático o ChatGPT manual.
-- El modo manual genera un prompt específico con canción, guitarra y partes marcadas; cópialo en ChatGPT y pega aquí su respuesta JSON para verla como cadena, parámetros y snapshots.
-- “Guardar preset” conserva la recomendación en este navegador. “Mis presets” permite ver Todo, Gemini y ChatGPT con carátula, canción y artista; puedes abrir o borrar.
-- Los presets se guardan localmente en este navegador/dispositivo actual; no se sincronizan entre teléfono y computadora.
+CAMBIOS
+- Busca canciones y carátulas en el catálogo de Apple/iTunes.
+- Al elegir una canción genera un preset con APInex usando el modelo free/gpt-6-luna.
+- Incluye conversación contextual: las preguntas responden en texto y las peticiones aplican cambios visuales a la cadena.
+- La cadena muestra Input con parámetros de Noise Gate, numera hasta ocho efectos DSP y termina con Output. Input y Output no cuentan entre los ocho.
+- Conserva las rutas Live/PA, snapshots, edición de parámetros, perfiles de guitarra y biblioteca local.
+- Los presets y la clave de API se guardan solo en este navegador.
 
-ACTUALIZAR GITHUB PAGES
-1. Extrae el ZIP.
-2. En tu repositorio, reemplaza el index.html publicado por el index.html de este paquete.
-3. Espera a que Pages publique la actualización y recarga la página.
+CONFIGURACIÓN
+1. Abre la app publicada por HTTPS.
+2. Pulsa “Configurar APInex” y pega tu clave API.
+3. Usa “Probar conexión” y luego “Guardar clave”.
+4. Busca una canción para generar su cadena.
 
-ACTUALIZAR CLOUDFLARE WORKER (OPCIONAL)
-1. Abre el Worker existente y reemplaza su código por worker.js.
-2. Conserva los secretos GEMINI_API_KEY y APP_TOKEN y la variable CORS_ORIGIN.
-3. Despliega el Worker. No pegues la API key en GitHub ni en la página.
-4. En la app, configura la URL workers.dev y el APP_TOKEN, luego usa “Probar conexión”.
-
-El Worker intenta gemini-3.8-flash, gemini-3.7-flash y gemini-3.6-flash; reintenta errores transitorios y da un mensaje claro si la cuota del proyecto está agotada. El modo ChatGPT manual no requiere Worker ni clave Gemini. La búsqueda de canciones y carátulas requiere internet.
+PRIVACIDAD Y LIMITACIONES
+- La clave se guarda en localStorage del navegador y se envía directamente a api.apinex.bond. No la pegues en el código ni publiques una captura que la muestre. Si compartes el navegador o el equipo, borra la clave desde la configuración.
+- La conexión directa requiere que APInex permita CORS desde el dominio de GitHub Pages. Si el navegador muestra un error CORS, la app no puede evitarlo sin un proxy/backend; en ese caso habrá que volver a usar un Worker o una función de servidor.
+- Los límites gratuitos de APInex son administrados por APInex y pueden cambiar.
+- La búsqueda y las carátulas requieren internet.
+- La cadena es una recomendación visual; la app no crea un archivo .hlx ni escribe al pedal. Revisa nombres y parámetros en HX Edit antes de usarla.
